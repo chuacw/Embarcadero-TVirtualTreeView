@@ -3791,7 +3791,7 @@ type
   end;
 
 var
-  ClipboardDescriptions: array [1..CF_MAX - 1] of TClipboardFormatEntry = (
+  ClipboardDescriptions: array [1 .. CF_MAX-1] of TClipboardFormatEntry = (
     (ID: CF_TEXT; Description: 'Plain text'), // Do not localize
     (ID: CF_BITMAP; Description: 'Windows bitmap'), // Do not localize
     (ID: CF_METAFILEPICT; Description: 'Windows metafile'), // Do not localize
@@ -3806,8 +3806,11 @@ var
     (ID: CF_WAVE; Description: 'Wav audio data'), // Do not localize
     (ID: CF_UNICODETEXT; Description: 'Unicode text'), // Do not localize
     (ID: CF_ENHMETAFILE; Description: 'Enhanced metafile image'), // Do not localize
+    { WINVER >= 0x400 }
     (ID: CF_HDROP; Description: 'File name(s)'), // Do not localize
-    (ID: CF_LOCALE; Description: 'Locale descriptor') // Do not localize
+    (ID: CF_LOCALE; Description: 'Locale descriptor'), // Do not localize
+    { WINVER >= 0x500 }
+    (ID: CF_DIBV5; Description: 'DIBV5 image') // Do not localize
   );
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -4742,6 +4745,9 @@ const
   Grays: array[0..3] of TColor = (clWhite, clSilver, clGray, clBlack);
   SysGrays: array[0..3] of TColor = (clWindow, clBtnFace, clBtnShadow, clBtnText);
 
+var
+  HInstBaseVirtualTree: HINST;
+
 procedure ConvertImageList(IL: TImageList; const ImageName: string; ColorRemapping: Boolean = True); 
 
 // Loads a bunch of images given by ImageName into IL. If ColorRemapping = True then a mapping of gray values to
@@ -4758,13 +4764,16 @@ var
 begin
   Watcher.Enter;
   try
+    if HInstBaseVirtualTree = 0 then
+      HInstBaseVirtualTree := FindClassHInstance(TBaseVirtualTree);
+
     // Since we want the image list appearing in the correct system colors, we have to remap its colors.
     Images := TBitmap.Create;
     OneImage := TBitmap.Create;
     if ColorRemapping then
-      Images.Handle := CreateMappedRes(FindClassHInstance(TBaseVirtualTree), PChar(ImageName), Grays, SysGrays)
+      Images.Handle := CreateMappedRes(HInstBaseVirtualTree, PChar(ImageName), Grays, SysGrays)
     else
-      Images.Handle := LoadBitmap(FindClassHInstance(TBaseVirtualTree), PChar(ImageName));
+      Images.Handle := LoadBitmap(HInstBaseVirtualTree, PChar(ImageName));
 
     try
       Assert(Images.Height > 0, 'Internal image "' + ImageName + '" is missing or corrupt.');
@@ -14821,18 +14830,16 @@ begin
     if Source.Transparent then
     begin
       // Leave transparent area as destination unchanged (DST), copy non-transparent areas to canvas (SRCCOPY).
-      with DrawRect do
-        MaskBlt(Target.Handle, Left - Offset.X, Top - Offset.Y, (Right - Offset.X) - (Left - Offset.X),
-          (Bottom - Offset.Y) - (Top - Offset.Y), Source.Canvas.Handle, Left - PicRect.Left, DrawRect.Top - PicRect.Top,
-          Source.MaskHandle, Left - PicRect.Left, Top - PicRect.Top, MakeROP4(DST, SRCCOPY));
+      MaskBlt(Target.Handle, DrawRect.Left - Offset.X, DrawRect.Top - Offset.Y, (DrawRect.Right - Offset.X) - (DrawRect.Left - Offset.X),
+        (DrawRect.Bottom - Offset.Y) - (DrawRect.Top - Offset.Y), Source.Canvas.Handle, DrawRect.Left - PicRect.Left, DrawRect.Top - PicRect.Top,
+        Source.MaskHandle, DrawRect.Left - PicRect.Left, DrawRect.Top - PicRect.Top, MakeROP4(DST, SRCCOPY));
     end
     else
     begin
       // copy image to destination
-      with DrawRect do
-        BitBlt(Target.Handle, Left - Offset.X, Top - Offset.Y, (Right - Offset.X) - (Left - Offset.X),
-          (Bottom - Offset.Y) - (Top - Offset.Y) + R.Top, Source.Canvas.Handle, Left - PicRect.Left, DrawRect.Top - PicRect.Top,
-          SRCCOPY);
+      BitBlt(Target.Handle, DrawRect.Left - Offset.X, DrawRect.Top - Offset.Y, (DrawRect.Right - Offset.X) - (DrawRect.Left - Offset.X),
+        (DrawRect.Bottom - Offset.Y) - (DrawRect.Top - Offset.Y) + R.Top, Source.Canvas.Handle, DrawRect.Left - PicRect.Left, DrawRect.Top - PicRect.Top,
+        SRCCOPY);
     end;
   end;
 end;
@@ -15036,6 +15043,7 @@ var
   ShiftState: Integer;
   P: TPoint;
   Formats: TFormatArray;
+  Effect: Integer;
 
 begin
   with Message, DragRec^ do
@@ -15073,7 +15081,9 @@ begin
 
             // Allowed drop effects are simulated for VCL dd.
             Result := DROPEFFECT_MOVE or DROPEFFECT_COPY;
-            DragOver(S, ShiftState, TDragState(DragMessage), Pos, Result);
+            Effect := Result;
+            DragOver(S, ShiftState, TDragState(DragMessage), Pos, Effect);
+            Result := Effect;
             FLastVCLDragTarget := FDropTargetNode;
             FVCLDragEffect := Result;
             if (DragMessage = dmDragLeave) and Assigned(FDropTargetNode) then
@@ -16724,7 +16734,7 @@ begin
         // window area region.
         if Message.Rgn <> 1 then
           CombineRgn(TempRgn, Message.Rgn, TempRgn, RGN_AND);
-        DefWindowProc(Handle, Message.Msg, Integer(TempRgn), 0);
+        DefWindowProc(Handle, Message.Msg, WPARAM(TempRgn), 0);
         DeleteObject(TempRgn);
       end
       else
@@ -21084,7 +21094,13 @@ begin
         begin
           Invalidate;
           Change(nil);
-        end;
+        end            // Borland change
+        else           // Borland change
+          Change(nil); // Borland change
+          // Provide consistent notifications when click a selected item.        // Borland change
+          // Otherwise, one click event when selection is cleared but no click   // Borland change
+          // event when item is reselected.                                      // Borland change
+          // Needed because of "Borland change" in InternalClearSelection.       // Borland change
       end
       else
         ClearSelection;
@@ -29659,36 +29675,33 @@ var
 begin
   if not FStopping then
   begin
-    with R do
+    // Set the edit's bounds but make sure there's a minimum width and the right border does not
+    // extend beyond the parent's left/right border.
+    if R.Left < 0 then
+      R.Left := 0;
+    if R.Right - R.Left < 30 then
     begin
-      // Set the edit's bounds but make sure there's a minimum width and the right border does not
-      // extend beyond the parent's left/right border.
-      if Left < 0 then
-        Left := 0;
-      if Right - Left < 30 then
-      begin
-        if FAlignment = taRightJustify then
-          Left := Right - 30
-        else
-          Right := Left + 30;
-      end;
-      if Right > FTree.ClientWidth then
-        Right := FTree.ClientWidth;
-      FEdit.BoundsRect := R;
-
-      // The selected text shall exclude the text margins and be centered vertically.
-      // We have to take out the two pixel border of the edit control as well as a one pixel "edit border" the
-      // control leaves around the (selected) text.
-      R := FEdit.ClientRect;
-      Offset := 2;
-      if tsUseThemes in FTree.FStates then
-        Inc(Offset);
-      InflateRect(R, -FTree.FTextMargin + Offset, Offset);
-      if not (vsMultiline in FNode.States) then
-        OffsetRect(R, 0, FTextBounds.Top - FEdit.Top);
-
-      SendMessage(FEdit.Handle, EM_SETRECTNP, 0, Integer(@R));
+      if FAlignment = taRightJustify then
+        R.Left := R.Right - 30
+      else
+        R.Right := R.Left + 30;
     end;
+    if R.Right > FTree.ClientWidth then
+      R.Right := FTree.ClientWidth;
+    FEdit.BoundsRect := R;
+
+    // The selected text shall exclude the text margins and be centered vertically.
+    // We have to take out the two pixel border of the edit control as well as a one pixel "edit border" the
+    // control leaves around the (selected) text.
+    R := FEdit.ClientRect;
+    Offset := 2;
+    if tsUseThemes in FTree.FStates then
+      Inc(Offset);
+    InflateRect(R, -FTree.FTextMargin + Offset, Offset);
+    if not (vsMultiline in FNode.States) then
+      OffsetRect(R, 0, FTextBounds.Top - FEdit.Top);
+
+    SendMessage(FEdit.Handle, EM_SETRECTNP, 0, Integer(@R));
   end;
 end;
 
